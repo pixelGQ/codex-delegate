@@ -1,104 +1,85 @@
-# Codex delegate (agent) runner
+# Codex Delegate Runner (agent)
 
-English version: see `README.en.md`
+A tiny queue + UI that lets your primary Codex instance delegate tasks to a second Codex session (“agent”) that can use the internet, run commands in a chosen working dir, and stream output. Good for:
+- Offloading long or noisy tasks (web research, codegen, scripts) without clogging your main Codex context.
+- Having a lightweight dashboard/TUI to watch multiple tasks.
+- Keeping the agent in a separate config/token (`~/.codex-agent`) so it doesn’t touch your main Codex auth/history.
 
-Ведущий Codex делегирует задачи второму экземпляру Codex с отдельной сессией/конфигом и (по желанию) доступом в интернет.
+*Русская версия: `README.ru.md`*
 
-## Ключевые идеи
-- Отдельный конфиг/сессия агента: `~/.codex-agent` (чтобы не путаться с основным `~/.codex`).
-- Runner создаёт для каждой задачи отдельный вызов `codex exec --skip-git-repo-check --cd <cwd>` (без постоянного PTY), принимает задачи в JSON, стримит вывод и отдаёт финальный ответ.
-- Транспорт: JSON Lines файлы в `runtime/`.
-- Стриминг: события пишутся в `runtime/delegate.stream`, отдельные логи по задачам — в `streams/<task_id>.log`.
-- Финальные ответы — в `runtime/delegate.out`.
+## How it works
+- CLI helper `delegate` appends tasks to `runtime/delegate.in` (JSONL).
+- `delegate_runner.py` watches the queue, runs `codex exec --skip-git-repo-check --cd <cwd>` with `CODEX_HOME=~/.codex-agent`, streams stdout/stderr to `streams/<task>.log` and events to `runtime/delegate.stream`, writes finals to `runtime/delegate.out`.
+- `delegate-ui` (curses) shows a table of tasks on the left and the selected log on the right.
 
-## Быстрый старт (после установки)
-- Отправить задачу: `delegate "сделай X" [--cwd path] [--timeout 120] [--allow-net] [--live] [--json]`
-- Live-вывод: `delegate "..." --live` (события `request/stream/final` прямо в терминал)
-- Смотреть поток позже: `delegate --stream <task_id>`
-- Перезапуск runner'а: `delegate --restart`
-- Проверить статус: `delegate --status`
-- TUI-монитор: `python3 delegate_tui.py` (лево — задачи, право — лог выбранной задачи, q — выход)
+## Requirements
+- Linux/macOS shell with Python 3.8+.
+- `codex` CLI installed and logged in (primary), plus a separate agent config/token at `~/.codex-agent`.
+- `python3-pexpect` (or `pip install -r requirements.txt`).
+- For GitHub MCP (optional): `node` + `npx`, and a `GITHUB_TOKEN` with `repo` scope.
 
-## Полная установка на новую машину (5 минут)
-1) Зависимости: `sudo apt-get install -y python3-pexpect` (или `pip install -r requirements.txt`).
-2) Код: поместите проект в `~/codex-delegate` (например, `git clone <repo> ~/codex-delegate`).
-3) Токен агента: `mkdir -p ~/.codex-agent && cp ~/.codex/auth.json ~/.codex-agent/`  
-   (или `CODEX_HOME=~/.codex-agent codex login` — отдельный логин).
-4) Конфиг агента `~/.codex-agent/config.toml`:
-   ```toml
+## Install (clean machine, ~5 minutes)
+1) Install dependency: `sudo apt-get install -y python3-pexpect` (or `pip install -r requirements.txt`).
+2) Place the repo, e.g. `git clone https://github.com/pixelGQ/codex-delegate.git ~/codex-delegate`.
+3) Agent token & config:
+   ```bash
+   mkdir -p ~/.codex-agent
+   cp ~/.codex/auth.json ~/.codex-agent/    # reuse token, or run:
+   CODEX_HOME=~/.codex-agent codex login    # separate login
+   cat > ~/.codex-agent/config.toml <<'CFG'
    model = "gpt-5.1-codex-max"
    model_reasoning_effort = "high"
-   [projects."/home/<user>"]
+   [projects."$HOME"]
    trust_level = "trusted"
    [features]
    web_search_request = true
    [sandbox_workspace_write]
    network_access = true
+   CFG
    ```
-5) PATH/алиасы:  
-   `echo 'PATH="$HOME/codex-delegate/bin:$PATH"' >> ~/.zshrc`  
-   `echo 'alias dlg="delegate-ui"' >> ~/.zshrc`  
-   затем `source ~/.zshrc`.
-6) Запустить раннер: `delegate --restart`, проверить `delegate --status`. Логи — `/tmp/delegate_runner.log`.
-7) Smoke-тест сети: `delegate "кто выиграл евро 2021" --research --live`.
+4) (Optional) GitHub MCP for the agent (uses stdio):
+   ```toml
+   # append to ~/.codex-agent/config.toml
+   [mcp_servers.github]
+   command = "npx"
+   args = ["-y", "@modelcontextprotocol/server-github"]
+   env = { GITHUB_TOKEN = "<your_token>" }
+   ```
+5) PATH + alias:
+   ```bash
+   echo 'PATH="$HOME/codex-delegate/bin:$PATH"' >> ~/.zshrc
+   echo 'alias dlg="delegate-ui"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+6) Start runner: `delegate --restart`; check: `delegate --status` (log: `/tmp/delegate_runner.log`).
+7) Smoke test web: `delegate "who won euro 2021" --research --live`.
 
-## Файлы и директории
-- `runtime/delegate.in`   — входящие запросы (JSONL).
-- `runtime/delegate.out`  — финальные ответы (JSONL).
-- `runtime/delegate.stream` — поток событий (JSONL, типы: request|stream|final|error).
-- `streams/<task_id>.log` — сырой stdout/stderr задачи.
-- `runtime/delegate.log`  — лог runner'а.
-- Конфиг агента: `~/.codex-agent/config.toml` (опционально отдельный токен или сетевой профиль).
+## Usage (CLI)
+- Basic: `delegate "do X" [--cwd path] [--timeout 120] [--allow-net|--no-net] [--live] [--json]`
+- Research preset: `--research` (forces `--search`, prompt asks for concise answer + 3–5 sources).
+- Context files: `--context file1,file2` (injects up to ~24 KB of content into the prompt).
+- Artifact: `--artifact path` (save stdout to file relative to `--cwd`).
+- Model/profile/sandbox: `--model`, `--profile`, `--sandbox` (defaults: model from config, sandbox workspace-write).
+- Stream later: `delegate --stream <task_id>`.
+- Monitor UI: `delegate-ui` or `dlg` (q to quit, arrows to select).
 
-## Протокол (v1)
-Запрос (JSON, одна строка):
-```
-{
-  "task_id": "uuid",
-  "instruction": "что сделать",
-  "cwd": "/path",
-  "timeout_s": 90,
-  "allow_net": true,
-  "context_files": []
-}
-```
+## Files
+- `runtime/delegate.in`   — incoming tasks (JSONL)
+- `runtime/delegate.out`  — final answers (JSONL)
+- `runtime/delegate.stream` — event stream (request/stream/final/error, JSONL)
+- `streams/<task>.log`    — raw stdout/stderr
+- `delegate_runner.py`    — queue worker
+- `delegate_tui.py`       — curses monitor
 
-Ответ:
-```
-{
-  "task_id": "uuid",
-  "status": "ok|timeout|error",
-  "summary": "кратко",
-  "stdout": "...(усечено)",
-  "stderr": "...(усечено)",
-  "truncated": true/false,
-  "duration_ms": 1234
-}
-```
+## Defaults & limits
+- Timeout 90s; max instruction ~4096 chars; final stdout+stderr capped at 16 KB (truncated with a flag).
 
-## Лимиты (по умолчанию)
-- timeout: 90s
-- макс длина инструкции: 4096 символов
-- вывод stdout+stderr в финале: 16 KB (усечка с пометкой)
+## Why separate agent?
+- Keeps your main Codex token/history clean; can use different sandbox or internet policy.
+- Lets you run noisy/long web or build tasks without filling main context.
+- Simple observable pipeline (JSONL + TUI) you can extend to web/desktop UI later.
 
-## Основные флаги `delegate`
-- `--allow-net` / `--no-net` — включить/выключить web_search (по умолчанию включено).
-- `--research` — быстрый режим «перепроверить в интернете»: авто `--search`, в промпте просит краткое резюме + 3–5 источников.
-- `--context f1,f2` — подмешать содержимое файлов (до ~24 KB).
-- `--artifact path` — сохранить stdout в файл относительно `--cwd`.
-- `--live` — стрим событий в реальном времени.
-- `--json` — вернуть финал одной строкой JSON.
-
-## Аутентификация агента
-- Runner использует `CODEX_HOME=~/.codex-agent`. Чтобы агент работал без повторного логина, скопируйте токен:
-  ```
-  mkdir -p ~/.codex-agent
-  cp ~/.codex/auth.json ~/.codex-agent/
-  ```
-  или залогиньтесь отдельно: `CODEX_HOME=~/.codex-agent codex login`.
-
-## Отладка
-- Runner лог: `/tmp/delegate_runner.log`
-- Поток событий: `runtime/delegate.stream`
-- Сырой лог задачи: `streams/<task_id>.log`
-- Если нет сети в ответе — проверьте `~/.codex-agent/config.toml` (`web_search_request=true`, `network_access=true`) и что флаг `--no-net` не указан.
+## Troubleshooting
+- Runner log: `/tmp/delegate_runner.log`
+- No web? Check `~/.codex-agent/config.toml` has `web_search_request=true`, `network_access=true`; ensure you didn’t pass `--no-net`.
+- MCP GitHub not visible? `codex mcp list` and verify token/`npx` available; add the same MCP block to `~/.codex/config.toml` if you want it in the primary Codex too.
