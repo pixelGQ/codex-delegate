@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# CLI helper to send tasks to the delegate runner and read the result.
+
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNTIME="$ROOT/runtime"
+STREAMS="$ROOT/streams"
+
+CODex_BIN="${CODEX_AGENT_BIN:-codex}"
+CODex_HOME="${CODEX_AGENT_HOME:-$HOME/.codex-agent}"
+
+usage() {
+  cat <<'EOF'
+delegate "instruction" [--cwd path] [--timeout N] [--allow-net] [--live] [--json] [--label txt] [--model m] [--profile p] [--sandbox mode] [--artifact path] [--context f1,f2] [--research]
+delegate --status
+delegate --restart
+delegate --stream TASK_ID
+EOF
+}
+
+restart_runner() {
+  pkill -f "delegate_runner.py" || true
+  nohup python3 "$ROOT/delegate_runner.py" >/tmp/delegate_runner.log 2>&1 &
+  echo "runner restarted (log: /tmp/delegate_runner.log)"
+}
+
+status_runner() {
+  if pgrep -f "delegate_runner.py" >/dev/null 2>&1; then
+    echo "runner: running"
+  else
+    echo "runner: down"
+  fi
+}
+
+stream_task() {
+  local task_id="$1"
+  tail -f "$STREAMS/$task_id.log"
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+case "$1" in
+  --restart)
+    restart_runner
+    exit 0
+    ;;
+  --status)
+    status_runner
+    exit 0
+    ;;
+  --stream)
+    shift
+    stream_task "$1"
+    exit 0
+    ;;
+esac
+
+instruction="$1"; shift || true
+cwd="$(pwd)"
+timeout_s=90
+allow_net=true
+live=0
+json_mode=0
+label=""
+model=""
+profile=""
+sandbox=""
+artifact=""
+context=""
+live_pid=""
+research=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cwd) cwd="$2"; shift 2 ;;
+    --timeout) timeout_s="$2"; shift 2 ;;
+    --allow-net) allow_net=true; shift ;;
+    --no-net) allow_net=false; shift ;;
+    --live) live=1; shift ;;
+    --json) json_mode=1; shift ;;
+    --label) label="$2"; shift 2 ;;
+    --model) model="$2"; shift 2 ;;
+    --profile) profile="$2"; shift 2 ;;
+    --sandbox) sandbox="$2"; shift 2 ;;
+    --artifact) artifact="$2"; shift 2 ;;
+    --context) context="$2"; shift 2 ;;
+    --research) research=true; shift ;;
+    *) echo "Unknown arg: $1"; usage; exit 1 ;;
+  esac
+done
+
+task_id="$(uuidgen 2>/dev/null || python3 -c 'import uuid;print(uuid.uuid4())')"
+
+mkdir -p "$RUNTIME" "$STREAMS"
+
+payload=$(TASK_ID="$task_id" INSTR="$instruction" CWD="$cwd" TIMEOUT_S="$timeout_s" ALLOW_NET="$allow_net" LABEL="$label" MODEL="$model" PROFILE="$profile" SANDBOX="$sandbox" ARTIFACT="$artifact" CONTEXT="$context" RESEARCH="$research" python3 - <<'PY'
+import json, os
+payload = {
+    "task_id": os.environ["TASK_ID"],
+    "instruction": os.environ["INSTR"],
+    "cwd": os.environ["CWD"],
+    "timeout_s": int(os.environ["TIMEOUT_S"]),
+    "allow_net": os.environ["ALLOW_NET"].lower() == "true",
+    "label": os.environ["LABEL"],
+    "model": os.environ.get("MODEL") or None,
+    "profile": os.environ.get("PROFILE") or None,
+    "sandbox": os.environ.get("SANDBOX") or None,
+    "artifact": os.environ.get("ARTIFACT") or None,
+    "context_files": [p for p in (os.environ.get("CONTEXT") or "").split(",") if p],
+    "research": os.environ.get("RESEARCH","false").lower() == "true",
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)
+
+echo "$payload" >> "$RUNTIME/delegate.in"
+
+echo "task_id: $task_id"
+
+# optional live stream of events
+if [[ "$live" -eq 1 ]]; then
+  STREAM_FILE="$RUNTIME/delegate.stream" TASK_ID="$task_id" python3 - <<'PY' &
+import json, os, time, pathlib, sys
+stream = pathlib.Path(os.environ["STREAM_FILE"])
+task_id = os.environ["TASK_ID"]
+stream.touch(exist_ok=True)
+with stream.open() as f:
+    f.seek(0, 2)
+    while True:
+        line = f.readline()
+        if not line:
+            time.sleep(0.2)
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if ev.get("task_id") != task_id:
+            continue
+        ev_type = ev.get("type")
+        if ev_type == "request":
+            print(f"[request] {ev.get('instruction','')}")
+        elif ev_type == "stream":
+            kind = ev.get("kind","stdout")
+            print(f"[{kind}] {ev.get('line','')}")
+        elif ev_type == "error":
+            print(f"[error] {ev.get('error','')}", file=sys.stderr)
+        elif ev_type == "final":
+            print(f"[final] status={ev.get('status')}, truncated={ev.get('truncated')}")
+            break
+PY
+  live_pid=$!
+fi
+
+# wait for response
+out_file="$RUNTIME/delegate.out"
+
+while true; do
+  if grep -q "$task_id" "$out_file" 2>/dev/null; then
+    line=$(grep "$task_id" "$out_file" | tail -n1)
+    if [[ "$json_mode" -eq 1 ]]; then
+      echo "$line"
+    else
+      summary=$(echo "$line" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("summary",""))')
+      stdout=$(echo "$line" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("stdout",""))')
+      status=$(echo "$line" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("status",""))')
+      [[ -n "$summary" ]] && echo "$summary"
+      [[ -n "$stdout" ]] && echo "$stdout"
+    fi
+    status=$(echo "$line" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("status",""))')
+    if [[ "$live_pid" != "" ]]; then kill "$live_pid" >/dev/null 2>&1 || true; fi
+    if [[ "$status" != "ok" ]]; then
+      exit 1
+    fi
+    exit 0
+  fi
+  sleep 0.5
+done
+live_pid=""

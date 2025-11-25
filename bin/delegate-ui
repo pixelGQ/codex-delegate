@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Open the delegate TUI monitor.
+ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec python3 "$ROOT/delegate_tui.py"
