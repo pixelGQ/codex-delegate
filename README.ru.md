@@ -18,8 +18,6 @@
 - Python 3.8+, установленный `codex` CLI (вход в основную учётку выполнен).
 - Отдельный конфиг/токен для агента в `~/.codex-agent`.
 - `python3-pexpect` (или `pip install -r requirements.txt`).
-- Для GitHub MCP (опционально): `node`/`npx`, `GITHUB_TOKEN` с правом `repo`.
-
 ## Установка (чистая машина, ~5 минут)
 1) Зависимости: `sudo apt-get install -y python3-pexpect` (или `pip install -r requirements.txt`).
 2) Репозиторий: `git clone https://github.com/pixelGQ/codex-delegate.git ~/codex-delegate`.
@@ -39,22 +37,14 @@
    network_access = true
    CFG
    ```
-4) (Опционально) GitHub MCP для агента:
-   ```toml
-   # допишите в ~/.codex-agent/config.toml
-   [mcp_servers.github]
-   command = "npx"
-   args = ["-y", "@modelcontextprotocol/server-github"]
-   env = { GITHUB_TOKEN = "<your_token>" }
-   ```
-5) PATH и алиас:
+4) PATH и алиас:
    ```bash
    echo 'PATH="$HOME/codex-delegate/bin:$PATH"' >> ~/.zshrc
    echo 'alias dlg="delegate-ui"' >> ~/.zshrc
    source ~/.zshrc
    ```
-6) Запустить раннер: `delegate --restart`; проверить: `delegate --status` (лог: `/tmp/delegate_runner.log`).
-7) Смоук-тест с интернетом: `delegate "кто выиграл евро 2021" --research --live`.
+5) Запустить раннер: `delegate --restart`; проверить: `delegate --status` (лог: `/tmp/delegate_runner.log`).
+6) Смоук-тест с интернетом: `delegate "кто выиграл евро 2021" --research --live`.
 
 ## Использование
 - Базово: `delegate "сделай X" [--cwd path] [--timeout 120] [--allow-net|--no-net] [--live] [--json]`
@@ -79,4 +69,3 @@
 ## Отладка
 - Лог раннера: `/tmp/delegate_runner.log`
 - Нет интернета? Проверьте `web_search_request=true` и `network_access=true` в `~/.codex-agent/config.toml`, а также отсутствие `--no-net`.
-- MCP GitHub: `codex mcp list`, проверьте токен и доступность `npx`.

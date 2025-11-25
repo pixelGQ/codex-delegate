@@ -16,8 +16,6 @@ A tiny queue + UI that lets your primary Codex instance delegate tasks to a seco
 - Linux/macOS shell with Python 3.8+.
 - `codex` CLI installed and logged in (primary), plus a separate agent config/token at `~/.codex-agent`.
 - `python3-pexpect` (or `pip install -r requirements.txt`).
-- For GitHub MCP (optional): `node` + `npx`, and a `GITHUB_TOKEN` with `repo` scope.
-
 ## Install (clean machine, ~5 minutes)
 1) Install dependency: `sudo apt-get install -y python3-pexpect` (or `pip install -r requirements.txt`).
 2) Place the repo, e.g. `git clone https://github.com/pixelGQ/codex-delegate.git ~/codex-delegate`.
@@ -37,22 +35,14 @@ A tiny queue + UI that lets your primary Codex instance delegate tasks to a seco
    network_access = true
    CFG
    ```
-4) (Optional) GitHub MCP for the agent (uses stdio):
-   ```toml
-   # append to ~/.codex-agent/config.toml
-   [mcp_servers.github]
-   command = "npx"
-   args = ["-y", "@modelcontextprotocol/server-github"]
-   env = { GITHUB_TOKEN = "<your_token>" }
-   ```
-5) PATH + alias:
+4) PATH + alias:
    ```bash
    echo 'PATH="$HOME/codex-delegate/bin:$PATH"' >> ~/.zshrc
    echo 'alias dlg="delegate-ui"' >> ~/.zshrc
    source ~/.zshrc
    ```
-6) Start runner: `delegate --restart`; check: `delegate --status` (log: `/tmp/delegate_runner.log`).
-7) Smoke test web: `delegate "who won euro 2021" --research --live`.
+5) Start runner: `delegate --restart`; check: `delegate --status` (log: `/tmp/delegate_runner.log`).
+6) Smoke test web: `delegate "who won euro 2021" --research --live`.
 
 ## Usage (CLI)
 - Basic: `delegate "do X" [--cwd path] [--timeout 120] [--allow-net|--no-net] [--live] [--json]`
@@ -82,4 +72,3 @@ A tiny queue + UI that lets your primary Codex instance delegate tasks to a seco
 ## Troubleshooting
 - Runner log: `/tmp/delegate_runner.log`
 - No web? Check `~/.codex-agent/config.toml` has `web_search_request=true`, `network_access=true`; ensure you didn’t pass `--no-net`.
-- MCP GitHub not visible? `codex mcp list` and verify token/`npx` available; add the same MCP block to `~/.codex/config.toml` if you want it in the primary Codex too.
