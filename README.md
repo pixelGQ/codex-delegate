@@ -65,9 +65,16 @@ A tiny queue + UI that lets your primary Codex instance delegate tasks to a seco
 - Timeout 90s; max instruction ~4096 chars; final stdout+stderr capped at 16 KB (truncated with a flag).
 
 ## Why separate agent?
-- Keeps your main Codex token/history clean; can use different sandbox or internet policy.
-- Lets you run noisy/long web or build tasks without filling main context.
-- Simple observable pipeline (JSONL + TUI) you can extend to web/desktop UI later.
+- Your primary Codex can delegate to a second Codex session: keep the main chat clean while the agent researches, builds, or runs tools.
+- Different policy per agent: separate token, sandbox, and network settings so risky/noisy work is isolated.
+- Streams + logs: everything is observable (JSONL, per-task logs, TUI) and easy to extend into a richer UI later.
+
+## Typical scenarios
+- **Web research offload**: `delegate "find fresh updates on <topic>" --research --live` — agent browses and returns a concise answer with 3–5 sources while you keep working.
+- **Long-running commands**: run builds/tests in a specific repo with `--cwd` and watch live output in TUI.
+- **File-aware codegen**: pass `--context src/file1.ts,README.md` so the agent drafts changes with the right snippets.
+- **Background multi-tasks**: queue several delegates; TUI shows statuses, logs, durations.
+- **Artifact capture**: save outputs (reports, generated code) via `--artifact reports/summary.txt`.
 
 ## Troubleshooting
 - Runner log: `/tmp/delegate_runner.log`
